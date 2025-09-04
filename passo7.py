@@ -5,119 +5,92 @@ from tkinter import messagebox
 from PIL import Image, ImageTk
 import torch
 from molscribe import MolScribe
+from huggingface_hub import hf_hub_download
 from rdkit import Chem
 from rdkit.Chem import Draw
 
-# ======================
-# Configurações
-# ======================
-MODEL_LOCAL_PATH = r"C:\Users\Aluno\quimitec\modelos\swin_base_char_aux_1m.pth"  # ajuste se necessário
-CAMERA_INDEX = 0  # 0 = notebook, 1 = externa
+# ====== Carregar modelo MolScribe ======
+ckpt = hf_hub_download('yujieq/MolScribe', 'swin_base_char_aux_1m.pth')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = MolScribe(ckpt, device=device)
 
-# Variáveis globais
+# ====== Global vars ======
 cap = None
 frame_atual = None
-SMILES = None
-mol_image = None
 
-# ======================
-# Carregar modelo MolScribe
-# ======================
-model = MolScribe(model_path=MODEL_LOCAL_PATH, device=torch.device("cpu"))
-
-# ======================
-# Funções
-# ======================
+# ====== Funções ======
 def ligar_camera():
     global cap
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    mostrar_video()
+    cap = cv2.VideoCapture(0)
+    atualizar_frame()
 
-def mostrar_video():
-    global cap, frame_atual
+def atualizar_frame():
+    global frame_atual
     if cap is not None and cap.isOpened():
         ret, frame = cap.read()
         if ret:
             frame_atual = frame
-            # Reduz o tamanho da imagem para caber melhor na tela
-            frame_resized = cv2.resize(frame, (320, 240))
-            img = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+            img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(img)
-            imgtk = ImageTk.PhotoImage(image=img)
-            lbl_foto.imgtk = imgtk
-            lbl_foto.configure(image=imgtk)
-    lbl_foto.after(10, mostrar_video)
+
+            # 🔽 Redimensionar a imagem da câmera para ocupar menos espaço
+            img = img.resize((400, 300))  # largura x altura
+
+            imgtk = ImageTk.PhotoImage(img)
+            lbl_video.imgtk = imgtk
+            lbl_video.configure(image=imgtk)
+    lbl_video.after(10, atualizar_frame)
 
 def tirar_foto():
-    global frame_atual
-    if frame_atual is not None:
-        caminho = os.path.join(os.getcwd(), "foto_capturada.jpg")
-        cv2.imwrite(caminho, frame_atual)
-        messagebox.showinfo("Foto Capturada", f"Foto salva em:\n{caminho}")
-    else:
-        messagebox.showwarning("Aviso", "Nenhuma imagem capturada!")
-
-def interpretar():
-    global SMILES, mol_image, frame_atual
     if frame_atual is None:
-        messagebox.showwarning("Aviso", "Primeiro capture uma foto!")
+        messagebox.showwarning("Aviso", "Nenhuma imagem capturada!")
         return
 
-    # Salvar frame temporário
-    path_temp = "tmp.png"
-    cv2.imwrite(path_temp, frame_atual)
+    temp_path = "tmp_capture.png"
+    cv2.imwrite(temp_path, frame_atual)
+    resultado = model.predict_image_file(
+        temp_path,
+        return_atoms_bonds=False,
+        return_confidence=False
+    )
 
-    # Gerar SMILES com MolScribe
-    resultado = model.predict_image_file(path_temp, return_atoms_bonds=False, return_confidence=False)
-    SMILES = resultado.get('smiles', None)
+    smiles = resultado.get('smiles', None)
+    if not smiles:
+        messagebox.showerror("Erro", "Não foi possível extrair SMILES.")
+        return
 
-    if SMILES:
-        lbl_smiles.config(text=f"SMILES: {SMILES}")
+    lbl_smiles.config(text=f"SMILES: {smiles}")
 
-        # Gerar imagem da molécula com RDKit
-        mol = Chem.MolFromSmiles(SMILES)
-        if mol is not None:
-            img = Draw.MolToImage(mol, size=(300, 300))
-            mol_image = ImageTk.PhotoImage(img)
-            lbl_mol.configure(image=mol_image)
-            lbl_mol.image = mol_image
-        else:
-            messagebox.showwarning("Erro", "Não foi possível gerar imagem da molécula!")
+    mol = Chem.MolFromSmiles(smiles)
+    if mol:
+        img = Draw.MolToImage(mol, size=(300, 300))
+        imgtk = ImageTk.PhotoImage(img)
+        lbl_mol.imgtk = imgtk
+        lbl_mol.configure(image=imgtk)
     else:
-        messagebox.showwarning("Erro", "Não foi possível extrair SMILES da imagem!")
+        messagebox.showerror("Erro", "SMILES inválido para RDKit.")
 
-# ======================
-# Interface Tkinter
-# ======================
-janela = tk.Tk()
-janela.title("Webcam → MolScribe + RDKit")
+# ===== Interface =====
+root = tk.Tk()
+root.title("MolScribe + RDKit")
 
-# Label para mostrar a foto da câmera
-lbl_foto = tk.Label(janela)
-lbl_foto.pack(pady=5)
+lbl_video = tk.Label(root)
+lbl_video.pack()
 
-# Botões
-btn_ligar = tk.Button(janela, text="Ligar a câmera", command=ligar_camera)
+btn_ligar = tk.Button(root, text="Ligar câmera", command=ligar_camera)
 btn_ligar.pack(pady=5)
 
-btn_foto = tk.Button(janela, text="Tirar a foto", command=tirar_foto)
+btn_foto = tk.Button(root, text="Tirar foto e interpretar", command=tirar_foto)
 btn_foto.pack(pady=5)
 
-btn_interpretar = tk.Button(janela, text="Interpretar (SMILES + Imagem)", command=interpretar)
-btn_interpretar.pack(pady=5)
-
-# Label para imagem da molécula
-lbl_mol = tk.Label(janela)
-lbl_mol.pack(pady=5)
-
-# Label para mostrar SMILES
-lbl_smiles = tk.Label(janela, text="SMILES: ")
+lbl_smiles = tk.Label(root, text="SMILES: ")
 lbl_smiles.pack(pady=5)
 
-# ======================
-# Finalização
-# ======================
-janela.mainloop()
-if cap is not None:
+lbl_mol = tk.Label(root)
+lbl_mol.pack(pady=5)
+
+root.mainloop()
+
+if cap:
     cap.release()
 cv2.destroyAllWindows()
