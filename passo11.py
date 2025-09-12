@@ -1,6 +1,6 @@
 import streamlit as st
 import tempfile
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageOps
 from molscribe import MolScribe
 from huggingface_hub import hf_hub_download
 from rdkit import Chem
@@ -16,7 +16,7 @@ def falar_texto(texto):
         var msg = new SpeechSynthesisUtterance("{texto}");
         msg.lang = "pt-BR";
         msg.rate = 1.0;
-        window.speechSynthesis.cancel(); // limpa falas anteriores
+        window.speechSynthesis.cancel();
         window.speechSynthesis.speak(msg);
     }})();
     </script>
@@ -58,7 +58,6 @@ st.set_page_config(page_title="MolScribe + RDKit", layout="wide")
 
 st.title("Quimitec")
 st.write("Reconhecimento de moléculas a partir de imagens.")
-
 st.divider()
 
 col1, col2 = st.columns([1, 1])
@@ -68,19 +67,43 @@ with col1:
     img_capturada = st.camera_input("Use a câmera para tirar a foto:")
 
     if img_capturada is not None:
-        st.success("✅ Foto capturada com sucesso!")
+        st.success("Foto capturada!")
 
         st.markdown("### Ajuste de contraste")
         img_pil = Image.open(img_capturada).resize((400, 300))
-        enhancer = ImageEnhance.Contrast(img_pil)
-        img_contrast = enhancer.enhance(2.0)
-        st.image(img_contrast, caption="Imagem ajustada")
+
+        img_gray = img_pil.convert("L")
+        block_size = 15
+        offset = 10
+        img_bw = Image.new("1", img_gray.size)
+        pixels = img_gray.load()
+        pixels_bw = img_bw.load()
+        width, height = img_gray.size
+
+        for y in range(height):
+            for x in range(width):
+                x0 = max(x - block_size // 2, 0)
+                y0 = max(y - block_size // 2, 0)
+                x1 = min(x + block_size // 2, width - 1)
+                y1 = min(y + block_size // 2, height - 1)
+
+                total = 0
+                count = 0
+                for j in range(y0, y1 + 1):
+                    for i in range(x0, x1 + 1):
+                        total += pixels[i, j]
+                        count += 1
+                media_local = total // count
+                pixels_bw[x, y] = 0 if pixels[x, y] < (media_local - offset) else 1
+
+        img_final = img_bw.convert("RGB")
+        st.image(img_final, caption="Imagem ajustada")
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
-            img_contrast.save(tmpfile.name)
+            img_final.save(tmpfile.name)
             tmp_filename = tmpfile.name
 
-        if st.button("🔍 Interpretar molécula"):
+        if st.button("Interpretar imagem"):
             with st.spinner("Processando imagem..."):
                 try:
                     resultado = model.predict_image_file(
@@ -99,9 +122,9 @@ with col2:
         smiles = st.session_state.resultado.get('smiles', None)
 
         if not smiles:
-            st.error("⚠️ Não consegui extrair SMILES. Tente outra imagem.")
+            st.error("Não foi possível extrair SMILES. Tente outra imagem.")
         else:
-            st.success("✅ Interpretação concluída!")
+            st.success("Interpretação concluída!")
             st.markdown(f"**SMILES:** `{smiles}`")
 
             nomes = banco_smiles.get(smiles, ["NOME NÃO ENCONTRADO"])
@@ -114,5 +137,3 @@ with col2:
             if mol:
                 img_mol = Draw.MolToImage(mol, size=(350, 350))
                 st.image(img_mol, caption="Molécula interpretada")
-    else:
-        st.info("📌 Capture e interprete uma molécula para ver o resultado aqui.")
